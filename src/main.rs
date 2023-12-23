@@ -15,7 +15,7 @@ fn main() {
                 let reply_message = Message {
                     header: Header {
                         packet_id: 1234,
-                        query_response_indicator: false,
+                        query_response_indicator: true,
                         op_code: message::OpCode::Query,
                         authoritative_answer: false,
                         truncation: false,
