@@ -1,8 +1,6 @@
 use bytes::BytesMut;
 use std::net::UdpSocket;
 
-use message::{Message, Question};
-
 mod message;
 
 fn main() -> anyhow::Result<()> {
@@ -12,16 +10,25 @@ fn main() -> anyhow::Result<()> {
     loop {
         match udp_socket.recv_from(&mut buf) {
             Ok((_, source)) => {
-                let query_message = Message::parse(&buf)?;
-                let mut reply_message = Message::new_reply(
+                let query_message = message::Message::parse(&buf)?;
+
+                let mut reply_message = message::Message::new_reply(
                     &query_message,
-                    vec![Question {
-                        name: "codecrafters.io".into(),
+                    vec![message::Question {
+                        name: message::DomainName::new("codecrafters.io")?,
                         ty: message::RecordType::Address,
                         class: message::Class::Internet,
                     }],
+                    vec![message::ResourceRecord::new(
+                        message::DomainName::new("codecrafters.io")?,
+                        message::RecordType::Address,
+                        message::Class::Internet,
+                        60,
+                        message::ResourceRecordData::IPv4([8, 8, 8, 8]),
+                    )],
                 );
                 reply_message.header.packet_id = 1234;
+
                 let mut response = BytesMut::with_capacity(64);
                 reply_message.write(&mut response)?;
                 udp_socket
