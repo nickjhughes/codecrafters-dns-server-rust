@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
             Ok((_, source)) => {
                 let query_message = message::Message::parse(&buf)?;
 
-                let mut reply_message = message::Message::new_reply(
+                let reply_message = message::Message::new_reply(
                     &query_message,
                     vec![message::Question {
                         name: message::DomainName::new("codecrafters.io")?,
@@ -27,7 +27,6 @@ fn main() -> anyhow::Result<()> {
                         message::ResourceRecordData::IPv4([8, 8, 8, 8]),
                     )],
                 );
-                reply_message.header.packet_id = 1234;
 
                 let mut response = BytesMut::with_capacity(64);
                 reply_message.write(&mut response)?;
