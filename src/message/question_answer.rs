@@ -60,7 +60,7 @@ pub enum Class {
 }
 
 /// A domain name encoded as a sequence of labels.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DomainName {
     labels: Vec<String>,
 }
@@ -140,6 +140,7 @@ impl Class {
 }
 
 impl DomainName {
+    #[allow(dead_code)]
     pub fn new(name: &str) -> anyhow::Result<Self> {
         let mut labels = Vec::new();
         for label in name.split('.') {

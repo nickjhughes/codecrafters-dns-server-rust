@@ -15,12 +15,12 @@ fn main() -> anyhow::Result<()> {
                 let reply_message = message::Message::new_reply(
                     &query_message,
                     vec![message::Question {
-                        name: message::DomainName::new("codecrafters.io")?,
+                        name: query_message.questions[0].name.clone(),
                         ty: message::RecordType::Address,
                         class: message::Class::Internet,
                     }],
                     vec![message::ResourceRecord::new(
-                        message::DomainName::new("codecrafters.io")?,
+                        query_message.questions[0].name.clone(),
                         message::RecordType::Address,
                         message::Class::Internet,
                         60,
