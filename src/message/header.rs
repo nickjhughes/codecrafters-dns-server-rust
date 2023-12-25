@@ -3,6 +3,7 @@ use nom::{
     number::complete::{be_u16, u8},
     IResult,
 };
+use rand::Rng;
 
 #[derive(Debug)]
 pub struct Header {
@@ -70,6 +71,25 @@ pub enum ResponseCode {
 }
 
 impl Header {
+    pub fn new_query(question_count: u16) -> Self {
+        let mut rng = rand::thread_rng();
+        Header {
+            packet_id: rng.gen::<u16>(),
+            is_response: false,
+            op_code: OpCode::Query,
+            authoritative_answer: false,
+            truncation: false,
+            recursion_desired: false,
+            recursion_available: false,
+            reserved: 0,
+            response_code: ResponseCode::Ok,
+            question_count,
+            answer_record_count: 0,
+            authority_record_count: 0,
+            additional_record_count: 0,
+        }
+    }
+
     pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
         let (rest, packet_id) = be_u16(input)?;
 

@@ -1,7 +1,7 @@
 use bytes::BufMut;
 use nom::multi::count;
 
-use header::Header;
+pub use header::Header;
 pub use question_answer::{
     Class, DomainName, Question, RecordType, ResourceRecord, ResourceRecordData,
 };
@@ -19,6 +19,16 @@ pub struct Message {
 }
 
 impl Message {
+    pub fn new_query(questions: Vec<Question>) -> Self {
+        Message {
+            header: Header::new_query(questions.len() as u16),
+            questions,
+            answers: Vec::new(),
+            authorities: Vec::new(),
+            additionals: Vec::new(),
+        }
+    }
+
     pub fn new_reply(
         query_message: &Message,
         questions: Vec<Question>,
@@ -96,14 +106,14 @@ impl Message {
         Ok(())
     }
 
-    pub fn get_label(&self, offset: u16) -> anyhow::Result<&str> {
+    pub fn get_labels(&self, offset: u16) -> anyhow::Result<Vec<String>> {
         if offset < 12 {
             anyhow::bail!("invalid label offset (in header)");
         }
         let mut msg_offset = 12;
         for question in self.questions.iter() {
             if offset < msg_offset + question.length() {
-                return question.get_label(offset - msg_offset);
+                return question.get_labels(offset - msg_offset);
             }
             msg_offset += question.length();
         }

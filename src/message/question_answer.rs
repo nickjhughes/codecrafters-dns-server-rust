@@ -1,7 +1,7 @@
 use bytes::BufMut;
 use nom::{
     bytes::complete::take,
-    number::complete::{be_u16, u8},
+    number::complete::{be_u16, be_u32, u8},
     IResult,
 };
 
@@ -75,7 +75,7 @@ pub enum Label {
     Pointer(u16),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Question {
     /// A domain name.
     pub name: DomainName,
@@ -85,7 +85,7 @@ pub struct Question {
     pub class: Class,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResourceRecord {
     /// The domain name.
     pub name: DomainName,
@@ -101,7 +101,7 @@ pub struct ResourceRecord {
     pub data: ResourceRecordData,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ResourceRecordData {
     /// An IPv4 address.
     IPv4([u8; 4]),
@@ -174,16 +174,20 @@ impl DomainName {
         length
     }
 
-    pub fn get_label(&self, offset: u16) -> anyhow::Result<&str> {
+    pub fn get_labels(&self, offset: u16) -> anyhow::Result<Vec<String>> {
         let mut name_offset = 0;
-        for label in self.labels.iter() {
+        for (i, label) in self.labels.iter().enumerate() {
             if offset == name_offset {
-                match label {
-                    Label::Value(string) => return Ok(string),
-                    Label::Pointer(_) => {
-                        return Err(anyhow::format_err!("invalid label offset (pointer)"))
+                let mut labels = Vec::new();
+                for label in self.labels.iter().skip(i) {
+                    match label {
+                        Label::Value(string) => labels.push(string.clone()),
+                        Label::Pointer(_) => {
+                            return Err(anyhow::format_err!("invalid label offset (pointer)"))
+                        }
                     }
                 }
+                return Ok(labels);
             }
             name_offset += match label {
                 Label::Value(string) => 1 + string.len() as u16,
@@ -198,10 +202,12 @@ impl DomainName {
     pub fn decompress(&self, message: &Message) -> anyhow::Result<Self> {
         let mut labels = Vec::new();
         for label in self.labels.iter() {
-            labels.push(match label {
-                Label::Value(string) => Label::Value(string.to_owned()),
-                Label::Pointer(offset) => Label::Value(message.get_label(*offset)?.to_owned()),
-            });
+            match label {
+                Label::Value(string) => labels.push(Label::Value(string.to_owned())),
+                Label::Pointer(offset) => {
+                    labels.extend(message.get_labels(*offset)?.drain(..).map(Label::Value));
+                }
+            }
         }
         Ok(DomainName { labels })
     }
@@ -263,15 +269,23 @@ impl Question {
         Ok((rest, Question { name, ty, class }))
     }
 
+    pub fn decompressed_clone(&self, message: &Message) -> anyhow::Result<Self> {
+        Ok(Question {
+            name: self.name.decompress(message)?,
+            ty: self.ty,
+            class: self.class,
+        })
+    }
+
     pub fn length(&self) -> u16 {
         self.name.length() + 4
     }
 
-    pub fn get_label(&self, offset: u16) -> anyhow::Result<&str> {
+    pub fn get_labels(&self, offset: u16) -> anyhow::Result<Vec<String>> {
         if offset >= self.name.length() {
             anyhow::bail!("invalid label offset (in type/class enums)");
         }
-        self.name.get_label(offset)
+        self.name.get_labels(offset)
     }
 
     pub fn write<B>(&self, buf: &mut B) -> anyhow::Result<()>
@@ -287,6 +301,7 @@ impl Question {
 }
 
 impl ResourceRecord {
+    #[allow(dead_code)]
     pub fn new(
         name: DomainName,
         ty: RecordType,
@@ -304,8 +319,34 @@ impl ResourceRecord {
         }
     }
 
-    pub fn parse(_input: &[u8]) -> IResult<&[u8], Self> {
-        todo!()
+    pub fn decompressed_clone(&self, message: &Message) -> anyhow::Result<Self> {
+        Ok(ResourceRecord {
+            name: self.name.decompress(message)?,
+            ty: self.ty,
+            class: self.class,
+            time_to_live: self.time_to_live,
+            length: self.length,
+            data: self.data.clone(),
+        })
+    }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (rest, name) = DomainName::parse(input)?;
+        let (rest, ty) = RecordType::parse(rest)?;
+        let (rest, class) = Class::parse(rest)?;
+        let (rest, time_to_live) = be_u32(rest)?;
+        let (rest, data) = ResourceRecordData::parse(rest, ty)?;
+        Ok((
+            rest,
+            ResourceRecord {
+                name,
+                ty,
+                class,
+                time_to_live,
+                length: data.length(),
+                data,
+            },
+        ))
     }
 
     pub fn write<B>(&self, buf: &mut B) -> anyhow::Result<()>
@@ -329,8 +370,16 @@ impl ResourceRecordData {
         }
     }
 
-    pub fn _parse(_input: &[u8]) -> IResult<&[u8], Self> {
-        todo!()
+    pub fn parse(input: &[u8], ty: RecordType) -> IResult<&[u8], Self> {
+        match ty {
+            RecordType::Address => {
+                let (rest, length) = be_u16(input)?;
+                assert_eq!(length, 4);
+                let (rest, ip) = take(4usize)(rest)?;
+                Ok((rest, ResourceRecordData::IPv4([ip[0], ip[1], ip[2], ip[3]])))
+            }
+            _ => unimplemented!(),
+        }
     }
 
     pub fn write<B>(&self, buf: &mut B) -> anyhow::Result<()>
