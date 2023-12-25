@@ -12,6 +12,19 @@ fn main() -> anyhow::Result<()> {
             Ok((_, source)) => {
                 let query_message = message::Message::parse(&buf)?;
 
+                let answers = {
+                    let mut a = Vec::new();
+                    for question in query_message.questions.iter() {
+                        a.push(message::ResourceRecord::new(
+                            question.name.decompress(&query_message)?,
+                            message::RecordType::Address,
+                            message::Class::Internet,
+                            60,
+                            message::ResourceRecordData::IPv4([8, 8, 8, 8]),
+                        ));
+                    }
+                    a
+                };
                 let reply_message = message::Message::new_reply(
                     &query_message,
                     vec![message::Question {
@@ -19,13 +32,7 @@ fn main() -> anyhow::Result<()> {
                         ty: message::RecordType::Address,
                         class: message::Class::Internet,
                     }],
-                    vec![message::ResourceRecord::new(
-                        query_message.questions[0].name.clone(),
-                        message::RecordType::Address,
-                        message::Class::Internet,
-                        60,
-                        message::ResourceRecordData::IPv4([8, 8, 8, 8]),
-                    )],
+                    answers,
                 );
 
                 let mut response = BytesMut::with_capacity(64);

@@ -5,9 +5,12 @@ use nom::{
     IResult,
 };
 
+use super::Message;
+
+const MAX_LABEL_SIZE: usize = 63;
+
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
-#[allow(dead_code)]
 pub enum RecordType {
     /// A: A host address.
     Address = 1,
@@ -46,7 +49,6 @@ pub enum RecordType {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
-#[allow(dead_code)]
 pub enum Class {
     /// IN: The internet.
     Internet = 1,
@@ -62,7 +64,15 @@ pub enum Class {
 /// A domain name encoded as a sequence of labels.
 #[derive(Debug, Clone)]
 pub struct DomainName {
-    labels: Vec<String>,
+    labels: Vec<Label>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Label {
+    /// A label value as a string.
+    Value(String),
+    /// A pointer to another label value.
+    Pointer(u16),
 }
 
 #[derive(Debug)]
@@ -76,7 +86,6 @@ pub struct Question {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct ResourceRecord {
     /// The domain name.
     pub name: DomainName,
@@ -93,7 +102,6 @@ pub struct ResourceRecord {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum ResourceRecordData {
     /// An IPv4 address.
     IPv4([u8; 4]),
@@ -140,14 +148,60 @@ impl Class {
 }
 
 impl DomainName {
-    #[allow(dead_code)]
-    pub fn new(name: &str) -> anyhow::Result<Self> {
+    pub fn _new(name: &str) -> anyhow::Result<Self> {
         let mut labels = Vec::new();
         for label in name.split('.') {
-            if label.len() > u8::MAX as usize {
-                anyhow::bail!("label cannot be longer than {} bytes", u8::MAX);
+            if label.len() > MAX_LABEL_SIZE {
+                anyhow::bail!("label cannot be longer than {MAX_LABEL_SIZE} bytes");
             }
-            labels.push(label.to_string());
+            labels.push(Label::Value(label.to_string()));
+        }
+        Ok(DomainName { labels })
+    }
+
+    pub fn length(&self) -> u16 {
+        let mut length = 0;
+        for label in self.labels.iter() {
+            length += match label {
+                Label::Value(string) => 1 + string.len() as u16,
+                Label::Pointer(_) => 2,
+            };
+        }
+        if matches!(self.labels.last().unwrap(), Label::Value(_)) {
+            // Final null byte
+            length += 1;
+        }
+        length
+    }
+
+    pub fn get_label(&self, offset: u16) -> anyhow::Result<&str> {
+        let mut name_offset = 0;
+        for label in self.labels.iter() {
+            if offset == name_offset {
+                match label {
+                    Label::Value(string) => return Ok(string),
+                    Label::Pointer(_) => {
+                        return Err(anyhow::format_err!("invalid label offset (pointer)"))
+                    }
+                }
+            }
+            name_offset += match label {
+                Label::Value(string) => 1 + string.len() as u16,
+                Label::Pointer(_) => 2,
+            };
+        }
+        Err(anyhow::format_err!(
+            "invalid label offset (not start of a label)"
+        ))
+    }
+
+    pub fn decompress(&self, message: &Message) -> anyhow::Result<Self> {
+        let mut labels = Vec::new();
+        for label in self.labels.iter() {
+            labels.push(match label {
+                Label::Value(string) => Label::Value(string.to_owned()),
+                Label::Pointer(offset) => Label::Value(message.get_label(*offset)?.to_owned()),
+            });
         }
         Ok(DomainName { labels })
     }
@@ -160,10 +214,21 @@ impl DomainName {
             rest = remainder;
             if label_length == 0 {
                 break;
+            } else if (label_length >> 6) == 0x03 {
+                // Pointer
+                let (remainder, pointer_remainder) = u8(rest)?;
+                rest = remainder;
+                let pointer = ((label_length & 0x3F) as u16) << 8 | (pointer_remainder as u16);
+                labels.push(Label::Pointer(pointer));
+                break;
+            } else if label_length as usize > MAX_LABEL_SIZE {
+                panic!("label cannot be longer than {MAX_LABEL_SIZE} bytes");
             }
             let (remainder, label) = take(label_length)(rest)?;
             rest = remainder;
-            labels.push(String::from_utf8(label.to_owned()).expect("labels should be valid utf-8"));
+            labels.push(Label::Value(
+                String::from_utf8(label.to_owned()).expect("labels should be valid utf-8"),
+            ));
         }
         Ok((rest, DomainName { labels }))
     }
@@ -173,11 +238,16 @@ impl DomainName {
         B: BufMut,
     {
         for label in self.labels.iter() {
-            if label.len() > u8::MAX as usize {
-                anyhow::bail!("label cannot be longer than {} bytes", u8::MAX);
+            match label {
+                Label::Value(string) => {
+                    if string.len() > MAX_LABEL_SIZE {
+                        anyhow::bail!("label cannot be longer than {MAX_LABEL_SIZE} bytes");
+                    }
+                    buf.put_u8(string.len() as u8);
+                    buf.put_slice(string.as_bytes());
+                }
+                Label::Pointer(_) => todo!(),
             }
-            buf.put_u8(label.len() as u8);
-            buf.put_slice(label.as_bytes());
         }
         buf.put_u8(0);
 
@@ -191,6 +261,17 @@ impl Question {
         let (rest, ty) = RecordType::parse(rest)?;
         let (rest, class) = Class::parse(rest)?;
         Ok((rest, Question { name, ty, class }))
+    }
+
+    pub fn length(&self) -> u16 {
+        self.name.length() + 4
+    }
+
+    pub fn get_label(&self, offset: u16) -> anyhow::Result<&str> {
+        if offset >= self.name.length() {
+            anyhow::bail!("invalid label offset (in type/class enums)");
+        }
+        self.name.get_label(offset)
     }
 
     pub fn write<B>(&self, buf: &mut B) -> anyhow::Result<()>

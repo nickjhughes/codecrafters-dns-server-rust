@@ -95,4 +95,20 @@ impl Message {
         }
         Ok(())
     }
+
+    pub fn get_label(&self, offset: u16) -> anyhow::Result<&str> {
+        if offset < 12 {
+            anyhow::bail!("invalid label offset (in header)");
+        }
+        let mut msg_offset = 12;
+        for question in self.questions.iter() {
+            if offset < msg_offset + question.length() {
+                return question.get_label(offset - msg_offset);
+            }
+            msg_offset += question.length();
+        }
+        Err(anyhow::format_err!(
+            "invalid label offset (after questions)"
+        ))
+    }
 }
